@@ -63,10 +63,10 @@ static esp_err_t camera_init(void)
         .frame_size   = FRAMESIZE_SVGA,   // 800x600
 
         // Quality: 10–15 is a good balance for OV3660
-        .jpeg_quality = 12,
+        .jpeg_quality = 10,
 
         // Use PSRAM for frame buffers (we have 8MB!)
-        .fb_count     = 2,
+        .fb_count     = 4,
         .fb_location  = CAMERA_FB_IN_PSRAM,
         .grab_mode    = CAMERA_GRAB_LATEST,  // always grab freshest frame
     };
@@ -80,7 +80,7 @@ static esp_err_t camera_init(void)
     // OV3660 sensor tuning
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
-        s->set_brightness(s, 0);      // -2 to 2
+        s->set_brightness(s, 1);      // -2 to 2
         s->set_contrast(s, 0);        // -2 to 2
         s->set_saturation(s, 0);      // -2 to 2
         s->set_sharpness(s, 0);       // -2 to 2
@@ -105,7 +105,6 @@ static esp_err_t camera_init(void)
     ESP_LOGI(TAG, "Camera ready — OV3660 on ESP32-S3 N16R8");
     return ESP_OK;
 }
-
 // ── MJPEG Streaming ───────────────────────────────────────────
 #define BOUNDARY        "mjpeg_boundary"
 #define CONTENT_TYPE    "multipart/x-mixed-replace;boundary=" BOUNDARY
@@ -114,8 +113,9 @@ static esp_err_t camera_init(void)
 
 static esp_err_t stream_handler(httpd_req_t *req)
 {
-    camera_fb_t *fb  = NULL;
-    esp_err_t    res = ESP_OK;
+    camera_fb_t *fb      = NULL;
+    camera_fb_t *fb_next = NULL;
+    esp_err_t    res     = ESP_OK;
     char         hdr[64];
 
     httpd_resp_set_type(req, CONTENT_TYPE);
@@ -124,15 +124,19 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Stream client connected");
 
-    while (true) {
-        fb = esp_camera_fb_get();
-        if (!fb) {
-            ESP_LOGW(TAG, "Frame capture failed, retrying...");
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
+    // Pre-fetch first frame
+    fb = esp_camera_fb_get();
+    if (!fb) {
+        ESP_LOGE(TAG, "First frame capture failed");
+        return ESP_FAIL;
+    }
 
-        res = httpd_resp_send_chunk(req, FRAME_BOUNDARY, strlen(FRAME_BOUNDARY));
+    while (true) {
+        // Fetch next frame while sending current one (pipeline)
+        fb_next = esp_camera_fb_get();
+
+        res = httpd_resp_send_chunk(req, FRAME_BOUNDARY,
+                                    strlen(FRAME_BOUNDARY));
         if (res != ESP_OK) goto cleanup;
 
         size_t hlen = snprintf(hdr, sizeof(hdr), FRAME_HEADER, fb->len);
@@ -142,15 +146,18 @@ static esp_err_t stream_handler(httpd_req_t *req)
         res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
 
     cleanup:
-        esp_camera_fb_return(fb);
+        esp_camera_fb_return(fb);       // release current frame
+        fb = fb_next;                   // move to pre-fetched frame
+        fb_next = NULL;
+
         if (res != ESP_OK) {
+            if (fb) esp_camera_fb_return(fb);
             ESP_LOGI(TAG, "Stream client disconnected");
             break;
         }
     }
     return res;
 }
-
 // ── Snapshot Handler (/snap) ──────────────────────────────────
 static esp_err_t snap_handler(httpd_req_t *req)
 {
@@ -199,10 +206,10 @@ static void start_webserver(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port        = 80;
-    cfg.stack_size         = 8192;
+    cfg.stack_size         = 16384;
     cfg.max_uri_handlers   = 8;
     cfg.lru_purge_enable   = true;
-
+    cfg.task_priority      = 20;
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server failed to start");
@@ -288,5 +295,6 @@ void app_main(void)
         ESP_LOGE(TAG, "Halting — fix camera wiring first");
         return;
     }
+    ESP_LOGI(TAG, "Running on core: %d", xPortGetCoreID());
     wifi_init();
 }
