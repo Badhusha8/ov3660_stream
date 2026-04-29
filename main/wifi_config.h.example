@@ -1,0 +1,4 @@
+#pragma once
+#define WIFI_SSID   "your_ssid_here"    // ← just placeholder text
+#define WIFI_PASS   "your_password_here"
+

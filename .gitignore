@@ -1,0 +1,28 @@
+# ── ESP-IDF Build Output ──────────────────────────────
+build/
+sdkconfig
+sdkconfig.old
+
+# ── Managed Components (downloaded, not yours) ────────
+managed_components/
+dependencies.lock
+
+# ── ESP-IDF Tools & Env ───────────────────────────────
+.espressif/
+*.elf
+*.bin
+*.map
+*.log
+
+# ── IDE & OS Files ────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── Secrets (never commit credentials!) ───────────────
+secrets.h
+wifi_config.h
